@@ -7,6 +7,11 @@ const config: Config = {
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
+    // inside theme.extend
+fontFamily: {
+  serif: ["var(--font-instrument)", "serif"],
+  mono: ["var(--font-jetbrains)", "monospace"],
+},
     extend: {
       colors: {
         border: "hsl(var(--border))",
