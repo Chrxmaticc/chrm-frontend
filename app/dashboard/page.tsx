@@ -1,273 +1,144 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Terminal, Power, Save, ArrowLeft, Settings, LogOut, Loader2, Bot, MessageSquare, Zap } from "lucide-react";
-import Link from "next/link";
+import { X, Shield, KeyRound, Loader2 } from "lucide-react";
 
-// Define the shape of our settings
-interface UserSettings {
-  prefix: string;
-  delays_enabled: boolean;
-  afk: {
-    enabled: boolean;
-    message: string;
-  };
-  autorespond: Record<string, string>;
-  autoreact: Record<string, string>;
-}
-
-export default function Dashboard() {
-  const router = useRouter();
-  const [discordId, setDiscordId] = useState<string | null>(null);
-  const [isActive, setIsActive] = useState(false);
-  const [settings, setSettings] = useState<UserSettings>({
-    prefix: ".",
-    delays_enabled: true,
-    afk: { enabled: false, message: "afk" },
-    autorespond: {},
-    autoreact: {}
-  });
-  
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  const [token, setToken] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const router = useRouter();
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  // HARDCODED API URL
+  const API_URL = "https://chrm-api.onrender.com";
 
-  // 1. Authenticate & Fetch Data on Load
-  useEffect(() => {
-    const savedId = localStorage.getItem("chrm_user_id");
-    if (!savedId) {
-      router.push("/"); // Kick them out if not logged in
-      return;
-    }
-    setDiscordId(savedId);
+  if (!isOpen) return null;
 
-    fetch(`${API_URL}/api/user/${savedId}`)
-      .then(res => {
-        if (!res.ok) throw new Error("Could not fetch user data");
-        return res.json();
-      })
-      .then(data => {
-        setIsActive(data.is_active);
-        if (data.settings && Object.keys(data.settings).length > 0) {
-          setSettings(prev => ({ ...prev, ...data.settings }));
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [API_URL, router]);
-
-  // 2. Toggle Bot On/Off (Immediate Save)
-  const toggleBot = async () => {
-    if (!discordId) return;
-    const newState = !isActive;
-    setIsActive(newState); // Optimistic UI update
-
-    try {
-      await fetch(`${API_URL}/api/user/${discordId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {}, is_active: newState })
-      });
-    } catch (e) {
-      setIsActive(!newState); // Revert on failure
-      alert("Failed to toggle engine.");
-    }
+  const handleOAuthLogin = () => {
+    // Simulated OAuth for now
+    localStorage.setItem("chrm_user_id", "test_user");
+    router.push("/dashboard");
   };
 
-  // 3. Save Settings
-  const saveSettings = async () => {
-    if (!discordId) return;
-    setSaving(true);
+  const handleTokenLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+
+    setIsLoading(true);
+    setError("");
+
+    // Create an AbortController to timeout if Render is asleep
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout for cold starts
+
     try {
-      await fetch(`${API_URL}/api/user/${discordId}`, {
-        method: "PATCH",
+      const res = await fetch(`${API_URL}/api/auth/token`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: settings, is_active: isActive })
+        body: JSON.stringify({ 
+          token: token, 
+          discord_id: "test_user" 
+        }),
+        signal: controller.signal
       });
-      alert("Settings saved! Engine will sync in 30 seconds.");
-    } catch (e) {
-      alert("Failed to save settings.");
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Invalid token.");
+      }
+
+      // Success!
+      localStorage.setItem("chrm_user_id", "test_user");
+      router.push("/dashboard");
+      onClose();
+      
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      
+      if (err.name === 'AbortError') {
+        setError("Render API is waking up. Please wait 30 seconds and try again.");
+      } else if (err.message === "Failed to fetch") {
+        setError("Network error. Make sure your API is online and CORS is enabled.");
+      } else {
+        setError(err.message || "Something went wrong.");
+      }
     } finally {
-      setSaving(false);
+      setIsLoading(false);
     }
   };
-
-  const handleLogout = () => {
-    localStorage.removeItem("chrm_user_id");
-    router.push("/");
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center font-mono gap-4">
-        <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
-        <span className="text-gray-500">initializing engine...</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center gap-4">
-        <p className="text-red-400 font-mono">Error: {error}</p>
-        <button onClick={handleLogout} className="bg-white text-black px-4 py-2 rounded-lg">Go Back Home</button>
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white p-6 font-sans selection:bg-white/20">
-      {/* Background Grid */}
-      <div className="fixed inset-0 z-0 pointer-events-none opacity-[0.03]" 
-        style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }} 
-      />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div className="relative w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-8 shadow-2xl">
+        <button 
+          onClick={onClose}
+          className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
 
-      <div className="max-w-5xl mx-auto space-y-8 relative z-10">
-        
-        {/* Top Navigation */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-6">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="p-2 hover:bg-white/10 rounded-lg transition-colors">
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
-            <h1 className="text-2xl font-serif flex items-center gap-2">
-              <Terminal className="w-5 h-5" /> Engine Dashboard
-            </h1>
+        <h2 className="text-2xl font-bold mb-2">Welcome to chrm</h2>
+        <p className="text-sm text-gray-400 mb-8">
+          Connect your Discord account to deploy your selfbot engine.
+        </p>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+            {error}
           </div>
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={saveSettings}
-              disabled={saving}
-              className="flex items-center gap-2 bg-white text-black px-5 py-2 rounded-lg text-sm font-semibold hover:bg-gray-200 transition-colors disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {saving ? "Saving..." : "Save Changes"}
-            </button>
-            <button 
-              onClick={handleLogout}
-              className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
-              title="Log out"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
-          </div>
+        )}
+
+        <button 
+          onClick={handleOAuthLogin}
+          className="w-full bg-white hover:bg-gray-200 text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-6"
+        >
+          <Shield className="w-5 h-5" />
+          Login with Discord
+        </button>
+
+        <div className="flex items-center gap-4 mb-6">
+          <div className="h-px bg-white/10 flex-1" />
+          <span className="text-xs text-gray-500 font-medium">OR USE TOKEN</span>
+          <div className="h-px bg-white/10 flex-1" />
         </div>
 
-        {/* Master Toggle Card */}
-        <div className={`p-8 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row items-center justify-between gap-6 ${isActive ? 'bg-gradient-to-r from-white/[0.08] to-transparent border-white/20' : 'bg-black border-white/10'}`}>
+        <form onSubmit={handleTokenLogin} className="space-y-4">
           <div>
-            <h2 className="text-2xl font-bold flex items-center gap-3">
-              <Power className={`w-6 h-6 ${isActive ? 'text-green-400' : 'text-gray-500'}`} />
-              Engine Status
-            </h2>
-            <p className="text-gray-400 text-sm mt-2 max-w-md">
-              {isActive 
-                ? "Your selfbot is currently running 24/7 on our servers." 
-                : "Your selfbot is paused. It will not respond to commands or update your status."}
+            <div className="relative">
+              <KeyRound className="absolute left-4 top-3.5 w-5 h-5 text-gray-500" />
+              <input
+                type="password"
+                placeholder="Paste your Discord token..."
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                className="w-full bg-black border border-white/10 rounded-xl py-3 pl-12 pr-4 text-sm focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all placeholder:text-gray-600"
+                required
+                disabled={isLoading}
+              />
+            </div>
+            <p className="text-[11px] text-gray-500 mt-2 px-1">
+              Tokens are stored securely. We never log your plaintext password.
             </p>
           </div>
           
           <button 
-            onClick={toggleBot}
-            className={`w-20 h-10 rounded-full transition-all duration-300 relative flex items-center px-1 shadow-inner ${isActive ? 'bg-green-500' : 'bg-gray-800 border border-white/10'}`}
+            type="submit"
+            disabled={isLoading}
+            className="w-full bg-[#1a1a1a] border border-white/10 hover:bg-[#222] text-white font-semibold py-3 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            <div className={`w-8 h-8 rounded-full bg-white shadow-md transition-transform duration-300 ${isActive ? 'translate-x-10' : 'translate-x-0'}`} />
+            {isLoading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Waking API & Authenticating...
+              </>
+            ) : (
+              "Login with Token"
+            )}
           </button>
-        </div>
-
-        {/* Settings Grid */}
-        <div className="grid md:grid-cols-2 gap-6">
-          
-          {/* General Settings */}
-          <div className="p-8 rounded-3xl bg-[#0a0a0a] border border-white/10 space-y-8 hover:border-white/20 transition-colors">
-            <h3 className="text-lg font-bold flex items-center gap-2 border-b border-white/10 pb-4">
-              <Settings className="w-5 h-5 text-gray-400"/> Core Settings
-            </h3>
-            
-            <div className="space-y-3">
-              <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">Command Prefix</label>
-              <input 
-                type="text" 
-                value={settings.prefix}
-                onChange={(e) => setSettings({...settings, prefix: e.target.value})}
-                className="w-full bg-black border border-white/10 rounded-xl p-3 text-lg font-mono focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
-                maxLength={3}
-              />
-              <p className="text-xs text-gray-600">The character you type before commands (e.g., `.help`).</p>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <div>
-                <label className="text-sm font-bold">Human Delays</label>
-                <p className="text-xs text-gray-500 mt-1">Adds a realistic 1.5s - 4.5s delay to all actions to avoid rate limits.</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={settings.delays_enabled}
-                  onChange={(e) => setSettings({...settings, delays_enabled: e.target.checked})}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
-              </label>
-            </div>
-          </div>
-
-          {/* AFK Settings */}
-          <div className="p-8 rounded-3xl bg-[#0a0a0a] border border-white/10 space-y-8 hover:border-white/20 transition-colors">
-            <h3 className="text-lg font-bold flex items-center gap-2 border-b border-white/10 pb-4">
-              <Bot className="w-5 h-5 text-gray-400"/> AFK Mode
-            </h3>
-            
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-bold">Enable AFK</label>
-                <p className="text-xs text-gray-500 mt-1">Automatically replies when someone pings you.</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={settings.afk?.enabled || false}
-                  onChange={(e) => setSettings({...settings, afk: {...settings.afk, enabled: e.target.checked}})}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
-              </label>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">AFK Message</label>
-              <input 
-                type="text" 
-                value={settings.afk?.message || ""}
-                onChange={(e) => setSettings({...settings, afk: {...settings.afk, message: e.target.value}})}
-                className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
-                placeholder="i am currently afk..."
-              />
-            </div>
-          </div>
-
-          {/* Info Card */}
-          <div className="p-8 rounded-3xl bg-gradient-to-br from-white/[0.05] to-transparent border border-white/10 md:col-span-2 flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="space-y-2">
-              <h3 className="text-lg font-bold flex items-center gap-2"><MessageSquare className="w-5 h-5" /> Advanced Plugins</h3>
-              <p className="text-sm text-gray-400 max-w-xl">
-                Autoresponders, game spoofing, and lyric syncing can all be managed directly via Discord commands. We are working on adding full dashboard controls for every single plugin in the next update.
-              </p>
-            </div>
-            <div className="flex items-center gap-3 bg-black/50 px-4 py-2 rounded-xl border border-white/10">
-              <Zap className="w-4 h-4 text-yellow-400" />
-              <span className="text-xs font-mono text-gray-300">Status: Syncing</span>
-            </div>
-          </div>
-
-        </div>
+        </form>
       </div>
     </div>
   );
