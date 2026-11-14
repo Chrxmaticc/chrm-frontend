@@ -10,13 +10,13 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
   const [error, setError] = useState("");
   const router = useRouter();
 
+  // CLEAN URL - NO TRAILING SLASH
+  const API_URL = "https://chrm-api.onrender.com";
+
   if (!isOpen) return null;
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
   const handleOAuthLogin = () => {
-    // In the future, this redirects to your Discord OAuth URL.
-    // For now, we'll simulate a successful login and route to dashboard.
+    // Simulated OAuth
     localStorage.setItem("chrm_user_id", "test_user");
     router.push("/dashboard");
   };
@@ -29,29 +29,29 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
     setError("");
 
     try {
-      // Send the raw token to your FastAPI backend
       const res = await fetch(`${API_URL}/api/auth/token`, {
         method: "POST",
+        mode: "cors",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          token: token, 
-          discord_id: "test_user" // In production, you'd grab this from the OAuth callback
+          token: token.trim(), // Trims any hidden spaces
+          discord_id: "test_user" 
         })
       });
 
       if (!res.ok) {
-        throw new Error("Failed to authenticate token.");
+        const errorText = await res.text();
+        console.error("API REJECTED:", res.status, errorText);
+        throw new Error(`API Error ${res.status}. Check console.`);
       }
 
-      // Save the session locally so the dashboard knows who to load
+      // Success!
       localStorage.setItem("chrm_user_id", "test_user");
-      
-      // Redirect to the dashboard
       router.push("/dashboard");
-      onClose(); // Close the modal
-
+      onClose();
+      
     } catch (err: any) {
-      setError(err.message || "Something went wrong. Check your token.");
+      setError(err.message || "Failed to connect to API.");
     } finally {
       setIsLoading(false);
     }
@@ -59,7 +59,7 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-      <div className="relative w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+      <div className="relative w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-8 shadow-2xl">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
@@ -78,7 +78,6 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
           </div>
         )}
 
-        {/* Option 1: OAuth */}
         <button 
           onClick={handleOAuthLogin}
           className="w-full bg-white hover:bg-gray-200 text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-6"
@@ -93,7 +92,6 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
           <div className="h-px bg-white/10 flex-1" />
         </div>
 
-        {/* Option 2: Token Input */}
         <form onSubmit={handleTokenLogin} className="space-y-4">
           <div>
             <div className="relative">
@@ -108,9 +106,6 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
                 disabled={isLoading}
               />
             </div>
-            <p className="text-[11px] text-gray-500 mt-2 px-1">
-              Tokens are encrypted with AES-256 before hitting our database. We never see your password.
-            </p>
           </div>
           
           <button 
