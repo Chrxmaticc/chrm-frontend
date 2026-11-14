@@ -1,44 +1,68 @@
 "use client";
 
 import { useState } from "react";
-import { X, Shield, KeyRound } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { X, Shield, KeyRound, Loader2 } from "lucide-react";
 
 export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const [token, setToken] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const router = useRouter();
 
   if (!isOpen) return null;
 
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
   const handleOAuthLogin = () => {
-    // Redirect to your FastAPI backend which handles the OAuth2 flow
-    window.location.href = "https://your-render-api.com/api/auth/discord";
+    // In the future, this redirects to your Discord OAuth URL.
+    // For now, we'll simulate a successful login and route to dashboard.
+    localStorage.setItem("chrm_user_id", "test_user");
+    router.push("/dashboard");
   };
 
-  const handleTokenLogin = (e: React.FormEvent) => {
+  const handleTokenLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
-    
-    // In production, send this via fetch to your FastAPI /api/auth/token endpoint
-    console.log("Sending token to backend for encryption...", token);
-    
-    // Example fetch:
-    /*
-    fetch("https://your-render-api.com/api/auth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token })
-    }).then(() => {
-      // Redirect to dashboard
-      window.location.href = "/dashboard";
-    });
-    */
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      // Send the raw token to your FastAPI backend
+      const res = await fetch(`${API_URL}/api/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          token: token, 
+          discord_id: "test_user" // In production, you'd grab this from the OAuth callback
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to authenticate token.");
+      }
+
+      // Save the session locally so the dashboard knows who to load
+      localStorage.setItem("chrm_user_id", "test_user");
+      
+      // Redirect to the dashboard
+      router.push("/dashboard");
+      onClose(); // Close the modal
+
+    } catch (err: any) {
+      setError(err.message || "Something went wrong. Check your token.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="relative w-full max-w-md bg-[#111] border border-white/10 rounded-2xl p-8 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div className="relative w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
         <button 
           onClick={onClose}
-          className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
+          className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
@@ -48,10 +72,16 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
           Connect your Discord account to deploy your selfbot engine.
         </p>
 
+        {error && (
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
         {/* Option 1: OAuth */}
         <button 
           onClick={handleOAuthLogin}
-          className="w-full bg-[#5865F2] hover:bg-[#4752C4] text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-6"
+          className="w-full bg-white hover:bg-gray-200 text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-6"
         >
           <Shield className="w-5 h-5" />
           Login with Discord
@@ -73,8 +103,9 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
                 placeholder="Paste your Discord token..."
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                className="w-full bg-black/50 border border-white/10 rounded-xl py-3 pl-12 pr-4 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all placeholder:text-gray-600"
+                className="w-full bg-black border border-white/10 rounded-xl py-3 pl-12 pr-4 text-sm focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all placeholder:text-gray-600"
                 required
+                disabled={isLoading}
               />
             </div>
             <p className="text-[11px] text-gray-500 mt-2 px-1">
@@ -84,9 +115,17 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
           
           <button 
             type="submit"
-            className="w-full bg-white text-black hover:bg-gray-200 font-semibold py-3 rounded-xl transition-colors"
+            disabled={isLoading}
+            className="w-full bg-[#1a1a1a] border border-white/10 hover:bg-[#222] text-white font-semibold py-3 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            Login with Token
+            {isLoading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Authenticating...
+              </>
+            ) : (
+              "Login with Token"
+            )}
           </button>
         </form>
       </div>
