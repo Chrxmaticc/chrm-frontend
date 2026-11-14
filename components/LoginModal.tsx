@@ -7,16 +7,15 @@ import { X, Shield, KeyRound, Loader2 } from "lucide-react";
 export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const [token, setToken] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("Authenticating...");
   const [error, setError] = useState("");
   const router = useRouter();
 
-  // CLEAN URL - NO TRAILING SLASH
   const API_URL = "https://chrm-api.onrender.com";
 
   if (!isOpen) return null;
 
   const handleOAuthLogin = () => {
-    // Simulated OAuth
     localStorage.setItem("chrm_user_id", "test_user");
     router.push("/dashboard");
   };
@@ -27,15 +26,35 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
 
     setIsLoading(true);
     setError("");
+    setLoadingText("Validating token with Discord...");
+
+    const cleanToken = token.trim();
 
     try {
+      // 1. Validate token with Discord and get the real User ID
+      const discordRes = await fetch("https://discord.com/api/v9/users/@me", {
+        headers: {
+          Authorization: cleanToken,
+        },
+      });
+
+      if (!discordRes.ok) {
+        throw new Error("Invalid token. Please check it and try again.");
+      }
+
+      const discordData = await discordRes.json();
+      const realDiscordId = discordData.id; // The actual user ID
+
+      setLoadingText("Saving to engine...");
+
+      // 2. Send the token and the REAL ID to your API
       const res = await fetch(`${API_URL}/api/auth/token`, {
         method: "POST",
         mode: "cors",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          token: token.trim(), // Trims any hidden spaces
-          discord_id: "test_user" 
+          token: cleanToken, 
+          discord_id: realDiscordId 
         })
       });
 
@@ -45,8 +64,8 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
         throw new Error(`API Error ${res.status}. Check console.`);
       }
 
-      // Success!
-      localStorage.setItem("chrm_user_id", "test_user");
+      // 3. Save the REAL ID to localStorage and redirect
+      localStorage.setItem("chrm_user_id", realDiscordId);
       router.push("/dashboard");
       onClose();
       
@@ -116,7 +135,7 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
             {isLoading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Authenticating...
+                {loadingText}
               </>
             ) : (
               "Login with Token"
