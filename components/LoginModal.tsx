@@ -11,14 +11,9 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
   const [error, setError] = useState("");
   const router = useRouter();
 
-  const API_URL = "https://chrm-api.onrender.com";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://chrm-api.onrender.com";
 
   if (!isOpen) return null;
-
-  const handleOAuthLogin = () => {
-    localStorage.setItem("chrm_user_id", "test_user");
-    router.push("/dashboard");
-  };
 
   const handleTokenLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,8 +59,14 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
         throw new Error(`API Error ${res.status}. Check console.`);
       }
 
-      // 3. Save the REAL ID to localStorage and redirect
+      const saved: { dashboard_key?: string } = await res.json().catch(() => ({}));
+      if (!saved.dashboard_key) {
+        throw new Error("API did not return a dashboard key - redeploy chrm-api first.");
+      }
+
+      // 3. Save the REAL ID + the per-user key the API requires on later calls
       localStorage.setItem("chrm_user_id", realDiscordId);
+      localStorage.setItem("chrm_dashboard_key", saved.dashboard_key);
       router.push("/dashboard");
       onClose();
       
@@ -98,18 +99,16 @@ export default function LoginModal({ isOpen, onClose }: { isOpen: boolean, onClo
         )}
 
         <button 
-          onClick={handleOAuthLogin}
-          className="w-full bg-white hover:bg-gray-200 text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-6"
+          disabled
+          title="Discord OAuth is not connected to the API yet - use your token below"
+          className="w-full bg-white/40 text-black/60 font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors mb-2 cursor-not-allowed"
         >
           <Shield className="w-5 h-5" />
           Login with Discord
         </button>
-
-        <div className="flex items-center gap-4 mb-6">
-          <div className="h-px bg-white/10 flex-1" />
-          <span className="text-xs text-gray-500 font-medium">OR USE TOKEN</span>
-          <div className="h-px bg-white/10 flex-1" />
-        </div>
+        <p className="text-[11px] text-gray-500 text-center mb-6 font-mono">
+          OAuth coming soon - use your token
+        </p>
 
         <form onSubmit={handleTokenLogin} className="space-y-4">
           <div>

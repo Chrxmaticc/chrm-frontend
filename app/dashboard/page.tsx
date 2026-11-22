@@ -2,18 +2,33 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Terminal, Power, Save, ArrowLeft, Settings, LogOut, Loader2, Bot, MessageSquare, Zap } from "lucide-react";
+import { Terminal, Power, Save, ArrowLeft, Settings, LogOut, Loader2, Bot } from "lucide-react";
 import Link from "next/link";
 
+// Only these keys are actually read by the engine:
+//   core/config.py -> data["settings"]["prefixes" | "delays_enabled" | "delay_min" | "delay_max"]
+// The API blob (users.settings) becomes exactly that namespace, so anything else
+// (features.afk, autorespond, emojis) lives in the bot's own config.json and
+// cannot be driven from here. Controls for them were removed on purpose.
 interface UserSettings {
-  prefix: string;
+  prefixes: string[];
   delays_enabled: boolean;
-  afk: {
-    enabled: boolean;
-    message: string;
+  delay_min: number;
+  delay_max: number;
+  afk: { enabled: boolean; message: string };
+}
+
+interface ApiPayload {
+  settings?: {
+    prefixes?: string[];
+    prefix?: string | string[];
+    delays_enabled?: boolean;
+    delay_min?: number;
+    delay_max?: number;
+    afk?: { enabled?: boolean; message?: string };
+    features?: { afk?: { enabled?: boolean; message?: string } };
   };
-  autorespond: Record<string, string>;
-  autoreact: Record<string, string>;
+  is_active?: boolean;
 }
 
 export default function Dashboard() {
@@ -21,18 +36,33 @@ export default function Dashboard() {
   const [discordId, setDiscordId] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(false);
   const [settings, setSettings] = useState<UserSettings>({
-    prefix: ".",
+    prefixes: ["."],
     delays_enabled: true,
-    afk: { enabled: false, message: "afk" },
-    autorespond: {},
-    autoreact: {}
+    delay_min: 1.5,
+    delay_max: 4.5,
+    afk: { enabled: false, message: "afk" }
   });
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const API_URL = "https://chrm-api.onrender.com";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://chrm-api.onrender.com";
+
+  // The API issues this at login and requires it on every per-user call, so a
+  // random visitor cannot read or toggle somebody else's engine.
+  const authHeaders = (json = false): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    const key = localStorage.getItem("chrm_dashboard_key");
+    if (key) headers["X-Dashboard-Key"] = key;
+    if (json) headers["Content-Type"] = "application/json";
+    return headers;
+  };
+
+  const clearSession = () => {
+    localStorage.removeItem("chrm_user_id");
+    localStorage.removeItem("chrm_dashboard_key");
+  };
 
   useEffect(() => {
     const savedId = localStorage.getItem("chrm_user_id");
@@ -42,20 +72,49 @@ export default function Dashboard() {
     }
     setDiscordId(savedId);
 
-    fetch(`${API_URL}/api/user/${savedId}`)
+    fetch(`${API_URL}/api/user/${savedId}`, { headers: authHeaders() })
       .then(res => {
+        if (res.status === 401 || res.status === 403) throw Object.assign(new Error("Session expired."), { auth: true });
+        if (res.status === 404) throw Object.assign(new Error("Account not found."), { gone: true });
         if (!res.ok) throw new Error("Could not fetch user data");
         return res.json();
       })
-      .then(data => {
-        setIsActive(data.is_active);
-        if (data.settings && Object.keys(data.settings).length > 0) {
-          setSettings(prev => ({ ...prev, ...data.settings }));
-        }
+      .then((data: ApiPayload) => {
+        setIsActive(Boolean(data.is_active));
+        const incoming = data.settings ?? {};
+        // Older rows stored a single `prefix` string; new ones store `prefixes`.
+        const raw = incoming.prefixes ?? incoming.prefix;
+        const prefixes = Array.isArray(raw)
+          ? raw.filter(Boolean)
+          : typeof raw === "string" && raw.trim()
+            ? [raw.trim()]
+            : null;
+        // AFK may sit at the blob root (legacy) or under features (current).
+        const afk = incoming.features?.afk ?? incoming.afk;
+        setSettings(prev => ({
+          ...prev,
+          ...(prefixes && prefixes.length ? { prefixes } : {}),
+          delays_enabled: incoming.delays_enabled ?? prev.delays_enabled,
+          delay_min: typeof incoming.delay_min === "number" ? incoming.delay_min : prev.delay_min,
+          delay_max: typeof incoming.delay_max === "number" ? incoming.delay_max : prev.delay_max,
+          afk: {
+            enabled: afk?.enabled ?? prev.afk.enabled,
+            message: afk?.message ?? prev.afk.message
+          }
+        }));
         setLoading(false);
       })
-      .catch((err) => {
-        setError(err.message);
+      .catch((err: any) => {
+        if (err?.auth) {
+          clearSession();
+          setError("Session expired - log in with your token again.");
+        } else if (err?.gone) {
+          clearSession();
+          router.push("/");
+          return;
+        } else {
+          setError(err?.message || "Could not load the dashboard.");
+        }
         setLoading(false);
       });
   }, [API_URL, router]);
@@ -66,11 +125,12 @@ export default function Dashboard() {
     setIsActive(newState);
 
     try {
-      await fetch(`${API_URL}/api/user/${discordId}`, {
+      const res = await fetch(`${API_URL}/api/user/${discordId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(true),
         body: JSON.stringify({ settings: {}, is_active: newState })
       });
+      if (!res.ok) throw new Error(`API ${res.status}`);
     } catch (e) {
       setIsActive(!newState);
       alert("Failed to toggle engine.");
@@ -79,23 +139,72 @@ export default function Dashboard() {
 
   const saveSettings = async () => {
     if (!discordId) return;
+
+    const prefixes = settings.prefixes.map(p => p.trim()).filter(Boolean);
+    if (prefixes.length === 0) {
+      alert("Pick at least one prefix.");
+      return;
+    }
+    if (settings.delay_max <= settings.delay_min) {
+      alert("Max delay must be larger than min delay.");
+      return;
+    }
+
     setSaving(true);
     try {
-      await fetch(`${API_URL}/api/user/${discordId}`, {
+      const res = await fetch(`${API_URL}/api/user/${discordId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: settings, is_active: isActive })
+        headers: authHeaders(true),
+        body: JSON.stringify({
+          // Keys the engine reads (core/config.py, apply_blob): namespace keys
+          // merge in place, feature keys land under features, the rest under
+          // settings.
+          settings: {
+            prefixes,
+            delays_enabled: settings.delays_enabled,
+            delay_min: settings.delay_min,
+            delay_max: settings.delay_max,
+            features: { afk: settings.afk }
+          },
+          is_active: isActive
+        })
       });
+
+      if (res.status === 401 || res.status === 403) {
+        clearSession();
+        router.push("/");
+        throw new Error("Session expired - log in with your token again.");
+      }
+      if (res.status === 404) {
+        throw new Error("This account is not registered with the engine. Log in with your token first.");
+      }
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(`API ${res.status}. ${detail.slice(0, 120)}`);
+      }
+
       alert("Settings saved! Engine will sync in 30 seconds.");
-    } catch (e) {
-      alert("Failed to save settings.");
+    } catch (e: any) {
+      alert(e?.message || "Failed to save settings.");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("chrm_user_id");
+  const handleLogout = async () => {
+    if (!discordId) {
+      router.push("/");
+      return;
+    }
+    if (!confirm("Log out? This deletes your stored token, so the engine stops completely (your settings are deleted too).")) {
+      return;
+    }
+    try {
+      await fetch(`${API_URL}/api/auth/logout/${discordId}`, { method: "DELETE", headers: authHeaders() });
+    } catch (e) {
+      // Still clear the browser side; the row is orphaned but harmless.
+    }
+    clearSession();
     router.push("/");
   };
 
@@ -151,14 +260,48 @@ export default function Dashboard() {
             </h3>
             <div className="space-y-3">
               <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">Command Prefix</label>
-              <input type="text" value={settings.prefix} onChange={(e) => setSettings({...settings, prefix: e.target.value})} className="w-full bg-black border border-white/10 rounded-xl p-3 text-lg font-mono focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all" maxLength={3} />
+              <input
+                type="text"
+                value={settings.prefixes[0] ?? ""}
+                onChange={(e) => setSettings({ ...settings, prefixes: [e.target.value, ...settings.prefixes.slice(1)] })}
+                className="w-full bg-black border border-white/10 rounded-xl p-3 text-lg font-mono focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
+                maxLength={3}
+              />
+              <p className="text-xs text-gray-500">
+                Stored as <span className="font-mono text-gray-400">prefixes[]</span> — the engine always also accepts <span className="font-mono text-gray-400">.</span> so you can never lock yourself out.
+                {settings.prefixes.length > 1 && (
+                  <> Also active: <span className="font-mono text-gray-400">{settings.prefixes.slice(1).join(" ")}</span>.</>
+                )}
+              </p>
             </div>
             <div className="flex items-center justify-between pt-2">
               <div>
                 <label className="text-sm font-bold">Human Delays</label>
-                <p className="text-xs text-gray-500 mt-1">Adds a realistic 1.5s - 4.5s delay.</p>
+                <p className="text-xs text-gray-500 mt-1">Random wait between each command.</p>
               </div>
               <input type="checkbox" checked={settings.delays_enabled} onChange={(e) => setSettings({...settings, delays_enabled: e.target.checked})} className="w-5 h-5 accent-white" />
+            </div>
+            <div className={`grid grid-cols-2 gap-4 transition-opacity ${settings.delays_enabled ? "" : "opacity-40"}`}>
+              <div className="space-y-3">
+                <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">Min (s)</label>
+                <input
+                  type="number" step="0.1" min="0" max="30"
+                  disabled={!settings.delays_enabled}
+                  value={settings.delay_min}
+                  onChange={(e) => setSettings({ ...settings, delay_min: Number(e.target.value) })}
+                  className="w-full bg-black border border-white/10 rounded-xl p-3 text-lg font-mono focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
+                />
+              </div>
+              <div className="space-y-3">
+                <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">Max (s)</label>
+                <input
+                  type="number" step="0.1" min="0" max="30"
+                  disabled={!settings.delays_enabled}
+                  value={settings.delay_max}
+                  onChange={(e) => setSettings({ ...settings, delay_max: Number(e.target.value) })}
+                  className="w-full bg-black border border-white/10 rounded-xl p-3 text-lg font-mono focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
+                />
+              </div>
             </div>
           </div>
 
@@ -169,13 +312,22 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-sm font-bold">Enable AFK</label>
-                <p className="text-xs text-gray-500 mt-1">Replies when pinged.</p>
+                <p className="text-xs text-gray-500 mt-1">Replies when you get pinged.</p>
               </div>
-              <input type="checkbox" checked={settings.afk?.enabled || false} onChange={(e) => setSettings({...settings, afk: {...settings.afk, enabled: e.target.checked}})} className="w-5 h-5 accent-white" />
+              <input type="checkbox" checked={settings.afk.enabled} onChange={(e) => setSettings({ ...settings, afk: { ...settings.afk, enabled: e.target.checked } })} className="w-5 h-5 accent-white" />
             </div>
             <div className="space-y-3">
               <label className="text-sm font-mono text-gray-400 uppercase tracking-wider">AFK Message</label>
-              <input type="text" value={settings.afk?.message || ""} onChange={(e) => setSettings({...settings, afk: {...settings.afk, message: e.target.value}})} className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all" />
+              <input
+                type="text"
+                disabled={!settings.afk.enabled}
+                value={settings.afk.message}
+                onChange={(e) => setSettings({ ...settings, afk: { ...settings.afk, message: e.target.value } })}
+                className="w-full bg-black border border-white/10 rounded-xl p-3 text-sm focus:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all"
+              />
+              <p className="text-xs text-gray-500">
+                Stored under <span className="font-mono text-gray-400">features.afk</span>, which is where the engine reads it.
+              </p>
             </div>
           </div>
         </div>
